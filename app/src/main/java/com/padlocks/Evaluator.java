@@ -20,8 +20,7 @@ public class Evaluator {
 	// State variables
 	private static final Map<String, Class<?>> compiledClasses = new HashMap<>();
 	private static final Map<String, Method> compiledMethods = new HashMap<>();
-	// String stores both variable type and name
-	private static final Map<String, Object> storedVariables = new HashMap<>();
+	private static final Map<String, Variable> storedVariables = new HashMap<>();
 
 	public static void evaluateInput(String input) throws Exception {
 		// Imports
@@ -66,7 +65,7 @@ public class Evaluator {
 	}
 
 	private static boolean isMethod(String input) {
-		return input.startsWith("public ") && input.contains("(") && input.contains(")");
+		return (input.startsWith("public ") || input.startsWith("private ") || input.startsWith("protected ")) && input.contains("(") && input.contains(")");
 	}
 
 	private static Object evaluateExpression(String input) throws Exception {
@@ -92,78 +91,144 @@ public class Evaluator {
 
 	private static void handleVariableDeclaration(String input) throws Exception {
 		String[] tokens = input.split("=");
-		// Extract variable name which includes its type
-		String variableName = tokens[0].trim();
+		String variableName = tokens[0].split(" ")[1].trim();
+		String variableType = tokens[0].split(" ")[0].trim();
 		String value = tokens[1].replace(";", "").trim();
 		
 		// Parse the value and store the variable
 		Object parsedValue = evaluateVariable(value);
-		storedVariables.put(variableName, parsedValue);
+
+		Variable newVariable = new Variable(variableName, variableType, parsedValue);
+		storedVariables.put(variableName, newVariable);
 	}
 
 	private static Object evaluateVariable(String value) throws Exception {
 		// Check if variable is equal to a method call
-		if (value.contains("(") && value.contains(")")) {
+		if (value.contains("new ")) {
+			return handleClassInstantiation(value);
+		}
+		else if (value.contains("(") && value.contains(")")) {
 			return handleMethodInvocation(value);
 		} else {
 			return evaluateExpression(value);
 		}
 	}
 
-
-	private static Object handleMethodInvocation(String input) throws Exception {
-		// Extract the method name
-		String methodName = input.replace("(", "").replace(")", "").replace(";", "");
-		
-		// Extract arguments between parentheses and split them by comma
+	private static Object handleClassInstantiation(String input) throws Exception {
+		String className = input.substring(input.indexOf("new ") + 4, input.indexOf("(")).trim();
 		String[] arguments = input.substring(input.indexOf('(') + 1, input.indexOf(')')).split(",");
 		Object[] args = arguments.length == 1 && arguments[0].trim().isEmpty() 
 			? new Object[0] 
 			: Arrays.stream(arguments)
-				.map(arg -> storedVariables.get(arg.trim()))
+				.map(arg -> storedVariables.get(arg.trim()).getValue())
 				.toArray();
+		// Check if the class is already compiled locally
+		if (compiledClasses.containsKey(className)) {
+			Class<?> clazz = compiledClasses.get(className);
+			return clazz.getDeclaredConstructor().newInstance(args);
+		}
+		else {
+			Class<?> clazz = Class.forName(className);
+			return clazz.getDeclaredConstructor().newInstance(args);
+		}
+	}
 
-		// Find the method based on the name and arguments
-		Method method = findMethod(methodName, args);
+	private static Object handleMethodInvocation(String input) throws Exception {
+		// Find the position of the dot to separate variable and method
+		int dotIndex = input.indexOf(".");
 		
-		if (method != null) {
-			Class<?> declaringClass = method.getDeclaringClass();
+		// If there's a dot, it's a method call on an instance variable
+		if (dotIndex != -1) {
+			String variableName = input.substring(0, dotIndex).trim();
+			String methodCall = input.substring(dotIndex + 1).trim();
 			
-			// Check if the method is static
-			if (Modifier.isStatic(method.getModifiers())) {
-				// Static method: invoke without instance
-				Object result = method.invoke(null, args);
-				System.out.println("Result: " + result);
-				return result;
-			} else {
-				// Non-static method: instantiate the class and invoke the method on the instance
-				Object instance = declaringClass.getDeclaredConstructor().newInstance();
+			// Extract the method name and arguments
+			String methodName = methodCall.substring(0, methodCall.indexOf("("));
+			String argsString = methodCall.substring(methodCall.indexOf("(") + 1, methodCall.indexOf(")"));
+			String[] arguments = argsString.split(",");
+			
+			// Retrieve the instance from stored variables
+			Object instance = storedVariables.get(variableName).getValue();
+			Object[] args = arguments.length == 1 && arguments[0].trim().isEmpty() 
+				? new Object[0] 
+				: Arrays.stream(arguments)
+					.map(arg -> storedVariables.get(arg.trim()).getValue())
+					.toArray();
+			
+			// Find the method in the instance's class
+			Method method = findMethod(methodName, args, instance.getClass());
+			
+			// Invoke the method on the instance
+			if (method != null) {
 				Object result = method.invoke(instance, args);
 				System.out.println("Result: " + result);
 				return result;
 			}
 		} else {
-			// If method not found, dynamically compile and execute the code
-			String className = "DynamicMethodEvaluator";
-			String code = "import java.lang.*; public class " + className + " { public static void eval() { " + input + " } }";
-			return compileAndExecute(className, "eval", code);
-		}
-	}
+			// Extract the method name
+			String methodName = input.replace("(", "").replace(")", "").replace(";", "");
+			
+			// Extract arguments between parentheses and split them by comma
+			String[] arguments = input.substring(input.indexOf('(') + 1, input.indexOf(')')).split(",");
+			Object[] args = arguments.length == 1 && arguments[0].trim().isEmpty() 
+				? new Object[0] 
+				: Arrays.stream(arguments)
+					.map(arg -> storedVariables.get(arg.trim()).getValue())
+					.toArray();
 
-
-	private static Method findMethod(String methodName, Object[] args) {
-		Method method = compiledMethods.get("MethodEvaluator." + methodName);
-		if (method == null) {
-			for (Class<?> importedClass : compiledClasses.values()) {
-				try {
-					method = importedClass.getMethod(methodName, Arrays.stream(args).map(Object::getClass).toArray(Class<?>[]::new));
-					break;
-				} catch (NoSuchMethodException e) {
-					// Method not found in this class, continue searching
+			// Find the method based on the name and arguments
+			Method method = findMethod(methodName, args, null);
+			
+			if (method != null) {
+				Class<?> declaringClass = method.getDeclaringClass();
+				
+				// Check if the method is static
+				if (Modifier.isStatic(method.getModifiers())) {
+					// Static method: invoke without instance
+					Object result = method.invoke(null, args);
+					System.out.println("Result: " + result);
+					return result;
+				} else {
+					// Non-static method: instantiate the class and invoke the method on the instance
+					Object instance = declaringClass.getDeclaredConstructor().newInstance();
+					Object result = method.invoke(instance, args);
+					System.out.println("Result: " + result);
+					return result;
 				}
+			} else {
+				// If method not found, dynamically compile and execute the code
+				String className = "DynamicMethodEvaluator";
+				String code = "import java.lang.*; public class " + className + " { public static void eval() { " + input + " } }";
+				return compileAndExecute(className, "eval", code);
 			}
 		}
-		return method;
+		
+		// No method found
+		return null;
+	}
+
+	private static Method findMethod(String methodName, Object[] args, Class<?> clazz) {
+		if (clazz == null) {
+			Method method = compiledMethods.get("MethodEvaluator." + methodName);
+			if (method == null) {
+				for (Class<?> importedClass : compiledClasses.values()) {
+					try {
+						method = importedClass.getMethod(methodName, Arrays.stream(args).map(Object::getClass).toArray(Class<?>[]::new));
+						break;
+					} catch (NoSuchMethodException e) {
+						// Method not found in this class, continue searching
+					}
+				}
+			}
+			return method;
+		}
+		else {
+			try {
+				return clazz.getMethod(methodName, Arrays.stream(args).map(Object::getClass).toArray(Class<?>[]::new));
+			} catch (NoSuchMethodException e) {
+				return null; // Method not found
+			}
+		}
 	}
 
 	private static void evaluateMethod(String input) throws Exception {
@@ -173,9 +238,9 @@ public class Evaluator {
 		
 		// Create method code, injecting stored variables
 		StringBuilder methodCode = new StringBuilder();
-		for (Map.Entry<String, Object> entry : storedVariables.entrySet()) {
-			methodCode.append("static ").append(entry.getKey())
-					.append(" = ").append(entry.getValue()).append("; ");
+		for (Map.Entry<String, Variable> entry : storedVariables.entrySet()) {
+			methodCode.append("static ").append(entry.getValue().getType()).append(entry.getKey())
+					.append(" = ").append(entry.getValue().getValue()).append("; ");
 		}
 		methodCode.append(input);
 		
@@ -189,12 +254,9 @@ public class Evaluator {
 
 
 	private static void evaluateClass(String input) throws Exception {
-		String[] classes = input.split("(?<=\\})");
-		for (String classCode : classes) {
-			String className = classCode.substring(classCode.indexOf("class") + 5, classCode.indexOf("{")).trim();
-			compile(className + ".java", classCode.trim());
-			loadCompiledClass(className);
-		}
+		String className = input.substring(input.indexOf("class") + 5, input.indexOf("{")).trim();
+		compile(className + ".java", input.trim());
+		loadCompiledClass(className);
 	}
 
 	private static void compile(String fileName, String code) throws Exception {
