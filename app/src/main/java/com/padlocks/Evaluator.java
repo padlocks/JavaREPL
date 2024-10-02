@@ -363,7 +363,6 @@ public class Evaluator {
 		return methodCode;
 	}
 
-
 	private static void evaluateClass(String input) throws Exception {
 		String className = input.substring(input.indexOf("class") + 5, input.indexOf("{")).trim();
 		compile(className + ".java", input.trim());
