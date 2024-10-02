@@ -3,6 +3,7 @@ package com.padlocks;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.Writer;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URL;
@@ -150,17 +151,91 @@ public class Evaluator {
 		Object[] args = arguments.length == 1 && arguments[0].trim().isEmpty() 
 			? new Object[0] 
 			: Arrays.stream(arguments)
-				.map(arg -> storedVariables.get(arg.trim()).getValue())
+				.map(arg -> parseArgument(arg.trim()))
 				.toArray();
+
+		// Infer the argument types and handle conversion of wrapper types to primitives
+    	Class<?>[] argTypes = Arrays.stream(args)
+            .map(Object::getClass)
+			.map(Evaluator::convertToPrimitive)
+            .toArray(Class<?>[]::new);
+
 		// Check if the class is already compiled locally
-		if (compiledClasses.containsKey(className)) {
-			Class<?> clazz = compiledClasses.get(className);
-			return clazz.getDeclaredConstructor().newInstance(args);
+		Class<?> clazz = compiledClasses.containsKey(className) 
+			? compiledClasses.get(className) 
+			: Class.forName(className);
+
+		// Get the constructor with the appropriate argument types
+		Constructor<?> constructor = clazz.getDeclaredConstructor(argTypes);
+		// If the constructor is not public, make it accessible
+		constructor.setAccessible(true);
+		return constructor.newInstance(args);
+	}
+
+	// Helper method to parse arguments dynamically
+	private static Object parseArgument(String arg) {
+		// Parse basic types like Integer, Double, Boolean, etc.
+		// Integer
+		if (arg.matches("-?\\d+")) {
+			return Integer.valueOf(arg);
+		// Double
+		} else if (arg.matches("-?\\d+\\.\\d+")) {
+			return Double.valueOf(arg);
+		// Boolean
+		} else if (arg.equalsIgnoreCase("true") || arg.equalsIgnoreCase("false")) {
+			return Boolean.valueOf(arg);
+		// Long
+		} else if (arg.matches("-?\\d+L")) {
+			return Long.valueOf(arg.substring(0, arg.length() - 1));
+		// Float
+		} else if (arg.matches("-?\\d+\\.\\d+F")) {
+			return Float.valueOf(arg.substring(0, arg.length() - 1));
+		// Short
+		} else if (arg.matches("-?\\d+S")) {
+			return Short.valueOf(arg.substring(0, arg.length() - 1));
+		// Byte
+		} else if (arg.matches("-?\\d+B")) {
+			return Byte.valueOf(arg.substring(0, arg.length() - 1));
+		// Character
+		} else if (arg.startsWith("'") && arg.endsWith("'")) {
+			return arg.charAt(1);
+		// Handle strings, stripped of quotes
+		} else if (arg.startsWith("\"") && arg.endsWith("\"")) {
+			return arg.substring(1, arg.length() - 1);
+		} else {
+			// Try to resolve the argument as a class name (enum, or another type)
+			try {
+				Class<?> clazz = Class.forName(arg);
+				return clazz;
+			} catch (ClassNotFoundException e) {
+				// If not found, assume it is a string argument
+				return arg;
+			}
 		}
-		else {
-			Class<?> clazz = Class.forName(className);
-			return clazz.getDeclaredConstructor().newInstance(args);
+	}
+
+	// Helper method to convert wrapper types to their primitive types
+	private static Class<?> convertToPrimitive(Class<?> clazz) {
+		if (clazz == Integer.class) {
+			return int.class;
+		} else if (clazz == Double.class) {
+			return double.class;
+		} else if (clazz == Boolean.class) {
+			return boolean.class;
+		} else if (clazz == Long.class) {
+			return long.class;
+		} else if (clazz == Float.class) {
+			return float.class;
+		} else if (clazz == Short.class) {
+			return short.class;
+		} else if (clazz == Byte.class) {
+			return byte.class;
+		} else if (clazz == Character.class) {
+			return char.class;
 		}
+
+		// Return the class itself if it's not a wrapper type
+		return clazz;
 	}
 
 	private static Object handleMethodInvocation(String input) throws Exception {
