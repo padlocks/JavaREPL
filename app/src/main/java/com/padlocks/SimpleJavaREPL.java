@@ -7,7 +7,6 @@ import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.Arrays;
-import java.util.List;
 
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileObject;
@@ -15,6 +14,7 @@ import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 
 import org.jline.reader.Completer;
+import org.jline.reader.Highlighter;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.impl.completer.StringsCompleter;
@@ -25,8 +25,13 @@ public class SimpleJavaREPL {
 
   public static void main(String[] args) throws Exception {
     Terminal terminal = TerminalBuilder.builder().system(true).build();
-    Completer completer = new StringsCompleter(getKeywords());
-    LineReader reader = LineReaderBuilder.builder().terminal(terminal).completer(completer).build();
+    Completer completer = new StringsCompleter(Keywords.get());
+    Highlighter highlighter = new JavaSyntaxHighlighter();
+    LineReader reader = LineReaderBuilder.builder()
+        .terminal(terminal)
+        .completer(completer)
+        .highlighter(highlighter)
+        .build();
     String input;
 
     System.out.println("Welcome to the Simple Java REPL. Type 'exit' to quit. Use tab while typing for autocomplete.");
@@ -188,16 +193,6 @@ public class SimpleJavaREPL {
 
     // Invoke the method and return the result
     return method.invoke(null);
-  }
-
-  // Returns a list of keywords for code completion
-  private static List<String> getKeywords() {
-    return Arrays.asList(
-        "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue",
-        "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if",
-        "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "null", "package",
-        "private", "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized",
-        "this", "throw", "throws", "transient", "try", "void", "volatile", "while", "System.out.println", "exit");
   }
 
   // Count occurrences of a character in a string
