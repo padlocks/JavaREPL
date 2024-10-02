@@ -71,8 +71,13 @@ public class Evaluator {
 	private static Object evaluateExpression(String input) throws Exception {
 		String className = "ExpressionEvaluator";
 		String methodName = "eval";
-		String code = "import java.lang.*; public class " + className + " { public static Object " + methodName + "() { return " + input + "; } }";
-		Object result = compileAndExecute(className, methodName, code);
+		StringBuilder code = new StringBuilder();
+		code.append("import java.lang.*; public class ").append(className).append(" { ");
+		code = injectStoredVariables(code);
+		code.append("public static Object ").append(methodName).append("() { ").append("return ").append(input.replace(";", "")).append("; } }");
+
+		
+		Object result = compileAndExecute(className, methodName, code.toString());
 		if (result != null) {
 			System.out.println("Result: " + result);
 			return result;
@@ -86,20 +91,45 @@ public class Evaluator {
 			handleVariableDeclaration(input);
 		} else if (input.contains("(") && input.contains(")")) {
 			handleMethodInvocation(input);
+		} else {
+			// It's an expression ending with a semicolon
+			evaluateExpression(input);
 		}
 	}
 
 	private static void handleVariableDeclaration(String input) throws Exception {
 		String[] tokens = input.split("=");
-		String variableName = tokens[0].split(" ")[1].trim();
-		String variableType = tokens[0].split(" ")[0].trim();
+		String variableName;
+		String variableType = null;
 		String value = tokens[1].replace(";", "").trim();
-		
+
+		// Check if it's a declaration or an assignment
+		// This is disgusting but it works to differentiate between declaration and assignment
+		if (tokens[0].split(" ").length == 2) {
+			// Declaration
+			variableName = tokens[0].split(" ")[1].trim();
+			variableType = tokens[0].split(" ")[0].trim();
+		} else {
+			// Assignment
+			variableName = tokens[0].trim();
+		}
+
 		// Parse the value and store the variable
 		Object parsedValue = evaluateVariable(value);
 
-		Variable newVariable = new Variable(variableName, variableType, parsedValue);
-		storedVariables.put(variableName, newVariable);
+		// If it's a declaration, create a new variable
+		if (variableType != null) {
+			Variable newVariable = new Variable(variableName, variableType, parsedValue);
+			storedVariables.put(variableName, newVariable);
+		} else {
+			// If it's an assignment, update the existing variable
+			Variable existingVariable = storedVariables.get(variableName);
+			if (existingVariable != null) {
+				existingVariable.setValue(parsedValue);
+			} else {
+				throw new RuntimeException("Variable " + variableName + " not declared.");
+			}
+		}
 	}
 
 	private static Object evaluateVariable(String value) throws Exception {
@@ -238,10 +268,7 @@ public class Evaluator {
 		
 		// Create method code, injecting stored variables
 		StringBuilder methodCode = new StringBuilder();
-		for (Map.Entry<String, Variable> entry : storedVariables.entrySet()) {
-			methodCode.append("static ").append(entry.getValue().getType()).append(entry.getKey())
-					.append(" = ").append(entry.getValue().getValue()).append("; ");
-		}
+		methodCode = injectStoredVariables(methodCode);
 		methodCode.append(input);
 		
 		// Compile and execute the method
@@ -250,6 +277,15 @@ public class Evaluator {
 		loadCompiledClass(className);
 		Method method = compiledClasses.get(className).getMethod(methodName);
 		compiledMethods.put(className + "." + methodName, method);
+	}
+
+	private static StringBuilder injectStoredVariables(StringBuilder methodCode) {
+		// Inject stored variables into the method code
+		for (Map.Entry<String, Variable> entry : storedVariables.entrySet()) {
+			methodCode.append("static ").append(entry.getValue().getType()).append(" ").append(entry.getKey())
+					.append(" = ").append(entry.getValue().getValue()).append("; ");
+		}
+		return methodCode;
 	}
 
 

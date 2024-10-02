@@ -52,7 +52,6 @@ public class SimpleJavaREPL {
         // Evaluate the input expression, statement or code block
         Evaluator.evaluateInput(input);
       } catch (Exception e) {
-        System.out.println("Error: " + e);
         System.err.println("Error: " + e.getMessage());
         e.printStackTrace();
       }
