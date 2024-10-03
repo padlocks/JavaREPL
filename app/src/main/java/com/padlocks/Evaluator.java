@@ -25,6 +25,8 @@ public class Evaluator {
 	private static final Map<String, Variable> storedVariables = new HashMap<>();
 	private static final ArrayList<String> storedImports = new ArrayList<>();
 
+	private static URLClassLoader classLoader;
+
 	public static void evaluateInput(String input) throws Exception {
 		try {
 			// Imports
@@ -66,6 +68,8 @@ public class Evaluator {
 			for (Map.Entry<String, Method> entry : compiledMethods.entrySet()) {
 				System.out.println(entry.getKey() + " = " + entry.getValue());
 			}
+
+			System.out.println();
 
 			e.printStackTrace();
 		}
@@ -418,6 +422,7 @@ public class Evaluator {
 		// String extendsClassName = input.contains("extends") ? input.substring(input.indexOf("extends") + 7, input.indexOf("{")).trim() : null;
 		// String implementsInterfaceName = input.contains("implements") ? input.substring(input.indexOf("implements") + 10, input.indexOf("{")).trim() : null; 
 		
+		// Compile the class
 		compile(className + ".java", code.toString().trim());
 		loadCompiledClass(className);
 	}
@@ -434,12 +439,22 @@ public class Evaluator {
 	private static void compile(String fileName, String code) throws Exception {
 		JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
 		StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null);
-		File sourceFile = new File(fileName);
+
+		// Create the directory if it doesn't exist
+		File dir = new File("./tmp/");
+		if (!dir.exists()) {
+			dir.mkdirs();
+		}
+
+		// Write the code to a file
+		File sourceFile = new File(dir, fileName);
 		try (Writer writer = new FileWriter(sourceFile)) {
 			writer.write(code);
 		}
+
+		// Compile the file
 		Iterable<? extends JavaFileObject> fileObjects = fileManager.getJavaFileObjectsFromFiles(Arrays.asList(sourceFile));
-		boolean compilationSuccess = compiler.getTask(null, fileManager, null, null, null, fileObjects).call();
+		boolean compilationSuccess = compiler.getTask(null, fileManager, null, Arrays.asList("-d", "./tmp/"), null, fileObjects).call();
 		if (!compilationSuccess) {
 			throw new RuntimeException("Compilation failed.");
 		}
@@ -453,12 +468,19 @@ public class Evaluator {
 	}
 
 	private static void loadCompiledClass(String className) throws Exception {
-		URLClassLoader classLoader = URLClassLoader.newInstance(new URL[]{new File("").toURI().toURL()});
+		// Initialize class loader once
+		if (classLoader == null) {
+			// Point to the directory where compiled .class files are stored
+			classLoader = URLClassLoader.newInstance(new URL[]{new File("./tmp/").toURI().toURL()});
+		}
+		
+		// Load the class using the same class loader
 		Class<?> compiledClass = Class.forName(className, true, classLoader);
 		compiledClasses.put(className, compiledClass);
+		
+		// Store any methods from the class into compiledMethods
 		for (Method method : compiledClass.getDeclaredMethods()) {
 			compiledMethods.put(className + "." + method.getName(), method);
-			storedImports.add("import " + className + ";");
 		}
 	}
 }
