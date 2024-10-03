@@ -8,6 +8,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -22,23 +23,51 @@ public class Evaluator {
 	private static final Map<String, Class<?>> compiledClasses = new HashMap<>();
 	private static final Map<String, Method> compiledMethods = new HashMap<>();
 	private static final Map<String, Variable> storedVariables = new HashMap<>();
+	private static final ArrayList<String> storedImports = new ArrayList<>();
 
 	public static void evaluateInput(String input) throws Exception {
-		// Imports
-		if (isImport(input)) {
-			handleImport(input);
-		// Classes
-		} else if (isClass(input)) {
-			evaluateClass(input);
-		// Methods
-		} else if (isMethod(input)) {
-			evaluateMethod(input);
-		// Expressions
-		} else if (isExpression(input)) {
-			evaluateExpression(input);
-		// Statements
-		} else {
-			evaluateStatement(input);
+		try {
+			// Imports
+			if (isImport(input)) {
+				handleImport(input);
+			// Classes
+			} else if (isClass(input)) {
+				evaluateClass(input);
+			// Methods
+			} else if (isMethod(input)) {
+				evaluateMethod(input);
+			// Expressions
+			} else if (isExpression(input)) {
+				evaluateExpression(input);
+			// Statements
+			} else {
+				evaluateStatement(input);
+			}
+		} catch (Exception e) {
+			// Print the exception message and local state
+			System.out.println("\n\nError: " + e.getMessage());
+
+			System.out.println("\n\nStored imports: ");
+			for (String importStatement : storedImports) {
+				System.out.println(importStatement);
+			}
+			
+			System.out.println("\n\nStored variables: ");
+			for (Map.Entry<String, Variable> entry : storedVariables.entrySet()) {
+				System.out.println(entry.getKey() + " = " + entry.getValue().getValue());
+			}
+
+			System.out.println("\n\nCompiled classes: ");
+			for (Map.Entry<String, Class<?>> entry : compiledClasses.entrySet()) {
+				System.out.println(entry.getKey() + " = " + entry.getValue());
+			}
+
+			System.out.println("\n\nCompiled methods: ");
+			for (Map.Entry<String, Method> entry : compiledMethods.entrySet()) {
+				System.out.println(entry.getKey() + " = " + entry.getValue());
+			}
+
+			e.printStackTrace();
 		}
 	}
 
@@ -47,11 +76,20 @@ public class Evaluator {
 	}
 
 	private static void handleImport(String input) throws Exception {
-		// Crude implementation of import handling, revisit this later
+		// Determine if the import is a local import or a java package import
 		String className = input.substring(input.lastIndexOf(' ') + 1, input.length() - 1).trim();
-		String fileName = className.replace('.', '/') + ".java";
-		compile(fileName, input);
-		loadCompiledClass(className);
+		if (className.startsWith("java.")) {
+			// Java package import, no need to compile
+			// System.out.println("Imported Java package: " + className);
+		} else {
+			// Local import, compile the class
+			String fileName = className.replace('.', '/') + ".java";
+			compile(fileName, input);
+			loadCompiledClass(className);
+		}
+
+		// Store import for injection
+		storedImports.add(input);
 	}
 
 	private static boolean isExpression(String input) {
@@ -347,8 +385,11 @@ public class Evaluator {
 		methodCode.append(input);
 		
 		// Compile and execute the method
-		String code = "import java.lang.*; public class " + className + " { " + methodCode.toString() + " }";
-		compile(className + ".java", code);
+		StringBuilder code = new StringBuilder();
+		code.append("import java.lang.*; public class ").append(className).append(" { ").append(methodCode.toString()).append(" }");
+		code = injectImports(code);
+	
+		compile(className + ".java", code.toString());
 		loadCompiledClass(className);
 		Method method = compiledClasses.get(className).getMethod(methodName);
 		compiledMethods.put(className + "." + methodName, method);
@@ -365,8 +406,29 @@ public class Evaluator {
 
 	private static void evaluateClass(String input) throws Exception {
 		String className = input.substring(input.indexOf("class") + 5, input.indexOf("{")).trim();
-		compile(className + ".java", input.trim());
+		className = className.split(" ")[0];
+
+		StringBuilder code = new StringBuilder();
+		code = code.append(input);
+
+		// Inject stored imports
+		code = injectImports(code);
+		
+		// Check for extends or implements
+		// String extendsClassName = input.contains("extends") ? input.substring(input.indexOf("extends") + 7, input.indexOf("{")).trim() : null;
+		// String implementsInterfaceName = input.contains("implements") ? input.substring(input.indexOf("implements") + 10, input.indexOf("{")).trim() : null; 
+		
+		compile(className + ".java", code.toString().trim());
 		loadCompiledClass(className);
+	}
+
+	private static StringBuilder injectImports(StringBuilder code) {
+		// Inject stored imports into the class code
+		for (String importStatement : storedImports) {
+			code.insert(0, importStatement + "\n");
+		}
+
+		return code;
 	}
 
 	private static void compile(String fileName, String code) throws Exception {
@@ -396,6 +458,7 @@ public class Evaluator {
 		compiledClasses.put(className, compiledClass);
 		for (Method method : compiledClass.getDeclaredMethods()) {
 			compiledMethods.put(className + "." + method.getName(), method);
+			storedImports.add("import " + className + ";");
 		}
 	}
 }
