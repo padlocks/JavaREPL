@@ -1,45 +1,31 @@
 package com.padlocks;
 
-import java.io.File;
-import java.io.FileWriter;
-import java.io.Writer;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.Map;
 
-import javax.tools.JavaCompiler;
-import javax.tools.JavaFileObject;
-import javax.tools.StandardJavaFileManager;
-import javax.tools.ToolProvider;
+import com.padlocks.Compiler;
 
 public class Evaluator {
-	// State variables
-	private static final Map<String, Class<?>> compiledClasses = new HashMap<>();
-	private static final Map<String, Method> compiledMethods = new HashMap<>();
-	private static final Map<String, Variable> storedVariables = new HashMap<>();
-	private static final ArrayList<String> storedImports = new ArrayList<>();
-
-	private static URLClassLoader classLoader;
+	private static final State state = new State();
+	private static final Parser parser = new Parser();
+	private static final Compiler compiler = new Compiler(state);
 
 	public static void evaluateInput(String input) throws Exception {
 		try {
 			// Imports
-			if (isImport(input)) {
+			if (parser.isImport(input)) {
 				handleImport(input);
 			// Classes
-			} else if (isClass(input)) {
+			} else if (parser.isClass(input)) {
 				evaluateClass(input);
 			// Methods
-			} else if (isMethod(input)) {
+			} else if (parser.isMethod(input)) {
 				evaluateMethod(input);
 			// Expressions
-			} else if (isExpression(input)) {
+			} else if (parser.isExpression(input)) {
 				evaluateExpression(input);
 			// Statements
 			} else {
@@ -49,34 +35,11 @@ public class Evaluator {
 			// Print the exception message and local state
 			System.out.println("\n\nError: " + e.getMessage());
 
-			System.out.println("\n\nStored imports: ");
-			for (String importStatement : storedImports) {
-				System.out.println(importStatement);
-			}
-			
-			System.out.println("\n\nStored variables: ");
-			for (Map.Entry<String, Variable> entry : storedVariables.entrySet()) {
-				System.out.println(entry.getKey() + " = " + entry.getValue().getValue());
-			}
-
-			System.out.println("\n\nCompiled classes: ");
-			for (Map.Entry<String, Class<?>> entry : compiledClasses.entrySet()) {
-				System.out.println(entry.getKey() + " = " + entry.getValue());
-			}
-
-			System.out.println("\n\nCompiled methods: ");
-			for (Map.Entry<String, Method> entry : compiledMethods.entrySet()) {
-				System.out.println(entry.getKey() + " = " + entry.getValue());
-			}
-
+			System.out.println(state);
 			System.out.println();
 
 			e.printStackTrace();
 		}
-	}
-
-	private static boolean isImport(String input) {
-		return input.startsWith("import ");
 	}
 
 	private static void handleImport(String input) throws Exception {
@@ -88,27 +51,12 @@ public class Evaluator {
 		} else {
 			// Local import, compile the class
 			String fileName = className.replace('.', '/') + ".java";
-			compile(fileName, input);
-			loadCompiledClass(className);
+			compiler.compile(fileName, input);
+			compiler.loadCompiledClass(className, input);
 		}
 
 		// Store import for injection
-		storedImports.add(input);
-	}
-
-	private static boolean isExpression(String input) {
-		return !input.endsWith(";");
-	}
-
-	private static boolean isClass(String input) {
-		return input.startsWith("class ") || 
-		input.startsWith("public class ") || 
-		input.startsWith("private class ") || 
-		input.startsWith("protected class ");
-	}
-
-	private static boolean isMethod(String input) {
-		return (input.startsWith("public ") || input.startsWith("private ") || input.startsWith("protected ")) && input.contains("(") && input.contains(")");
+		state.addStoredImport(input);
 	}
 
 	private static Object evaluateExpression(String input) throws Exception {
@@ -120,7 +68,7 @@ public class Evaluator {
 		code.append("public static Object ").append(methodName).append("() { ").append("return ").append(input.replace(";", "")).append("; } }");
 
 		
-		Object result = compileAndExecute(className, methodName, code.toString());
+		Object result = compiler.compileAndExecute(className, methodName, code.toString());
 		if (result != null) {
 			System.out.println("Result: " + result);
 			return result;
@@ -162,11 +110,11 @@ public class Evaluator {
 
 		// If it's a declaration, create a new variable
 		if (variableType != null) {
-			Variable newVariable = new Variable(variableName, variableType, parsedValue);
-			storedVariables.put(variableName, newVariable);
+			Variable newVariable = new Variable(variableName, variableType, parsedValue, input);
+			state.addStoredVariable(variableName, newVariable);
 		} else {
 			// If it's an assignment, update the existing variable
-			Variable existingVariable = storedVariables.get(variableName);
+			Variable existingVariable = state.getStoredVariable(variableName);
 			if (existingVariable != null) {
 				existingVariable.setValue(parsedValue);
 			} else {
@@ -193,18 +141,18 @@ public class Evaluator {
 		Object[] args = arguments.length == 1 && arguments[0].trim().isEmpty() 
 			? new Object[0] 
 			: Arrays.stream(arguments)
-				.map(arg -> parseArgument(arg.trim()))
+				.map(arg -> parser.parseArgument(arg.trim()))
 				.toArray();
 
 		// Infer the argument types and handle conversion of wrapper types to primitives
     	Class<?>[] argTypes = Arrays.stream(args)
             .map(Object::getClass)
-			.map(Evaluator::convertToPrimitive)
+			.map(parser::convertToPrimitive)
             .toArray(Class<?>[]::new);
 
 		// Check if the class is already compiled locally
-		Class<?> clazz = compiledClasses.containsKey(className) 
-			? compiledClasses.get(className) 
+		Class<?> clazz = state.getCompiledClasses().containsKey(className) 
+			? state.getCompiledClass(className) 
 			: Class.forName(className);
 
 		// Get the constructor with the appropriate argument types
@@ -212,72 +160,6 @@ public class Evaluator {
 		// If the constructor is not public, make it accessible
 		constructor.setAccessible(true);
 		return constructor.newInstance(args);
-	}
-
-	// Helper method to parse arguments dynamically
-	private static Object parseArgument(String arg) {
-		// Parse basic types like Integer, Double, Boolean, etc.
-		// Integer
-		if (arg.matches("-?\\d+")) {
-			return Integer.valueOf(arg);
-		// Double
-		} else if (arg.matches("-?\\d+\\.\\d+")) {
-			return Double.valueOf(arg);
-		// Boolean
-		} else if (arg.equalsIgnoreCase("true") || arg.equalsIgnoreCase("false")) {
-			return Boolean.valueOf(arg);
-		// Long
-		} else if (arg.matches("-?\\d+L")) {
-			return Long.valueOf(arg.substring(0, arg.length() - 1));
-		// Float
-		} else if (arg.matches("-?\\d+\\.\\d+F")) {
-			return Float.valueOf(arg.substring(0, arg.length() - 1));
-		// Short
-		} else if (arg.matches("-?\\d+S")) {
-			return Short.valueOf(arg.substring(0, arg.length() - 1));
-		// Byte
-		} else if (arg.matches("-?\\d+B")) {
-			return Byte.valueOf(arg.substring(0, arg.length() - 1));
-		// Character
-		} else if (arg.startsWith("'") && arg.endsWith("'")) {
-			return arg.charAt(1);
-		// Handle strings, stripped of quotes
-		} else if (arg.startsWith("\"") && arg.endsWith("\"")) {
-			return arg.substring(1, arg.length() - 1);
-		} else {
-			// Try to resolve the argument as a class name (enum, or another type)
-			try {
-				Class<?> clazz = Class.forName(arg);
-				return clazz;
-			} catch (ClassNotFoundException e) {
-				// If not found, assume it is a string argument
-				return arg;
-			}
-		}
-	}
-
-	// Helper method to convert wrapper types to their primitive types
-	private static Class<?> convertToPrimitive(Class<?> clazz) {
-		if (clazz == Integer.class) {
-			return int.class;
-		} else if (clazz == Double.class) {
-			return double.class;
-		} else if (clazz == Boolean.class) {
-			return boolean.class;
-		} else if (clazz == Long.class) {
-			return long.class;
-		} else if (clazz == Float.class) {
-			return float.class;
-		} else if (clazz == Short.class) {
-			return short.class;
-		} else if (clazz == Byte.class) {
-			return byte.class;
-		} else if (clazz == Character.class) {
-			return char.class;
-		}
-
-		// Return the class itself if it's not a wrapper type
-		return clazz;
 	}
 
 	private static Object handleMethodInvocation(String input) throws Exception {
@@ -293,14 +175,20 @@ public class Evaluator {
 			String methodName = methodCall.substring(0, methodCall.indexOf("("));
 			String argsString = methodCall.substring(methodCall.indexOf("(") + 1, methodCall.indexOf(")"));
 			String[] arguments = argsString.split(",");
-			
-			// Retrieve the instance from stored variables
-			Object instance = storedVariables.get(variableName).getValue();
 			Object[] args = arguments.length == 1 && arguments[0].trim().isEmpty() 
 				? new Object[0] 
 				: Arrays.stream(arguments)
-					.map(arg -> storedVariables.get(arg.trim()).getValue())
+					.map(arg -> parser.parseArgument(arg.trim()))
 					.toArray();
+
+			if (state.getStoredVariable(variableName) == null) {
+				Object result = evaluateMethodInvocationDynamically(methodName, args, input);
+				System.out.println("Result: " + result);
+				return result;
+			}
+			
+			// Retrieve the instance from stored variables
+			Object instance = state.getStoredVariable(variableName).getValue();
 			
 			// Find the method in the instance's class
 			Method method = findMethod(methodName, args, instance.getClass());
@@ -320,10 +208,20 @@ public class Evaluator {
 			Object[] args = arguments.length == 1 && arguments[0].trim().isEmpty() 
 				? new Object[0] 
 				: Arrays.stream(arguments)
-					.map(arg -> storedVariables.get(arg.trim()).getValue())
+					.map(arg -> parser.parseArgument(arg.trim()))
 					.toArray();
 
-			// Find the method based on the name and arguments
+			Object result = evaluateMethodInvocationDynamically(methodName, args, input);
+			System.out.println("Result: " + result);
+			return result;
+		}
+		
+		// No method found
+		return null;
+	}
+
+	private static Object evaluateMethodInvocationDynamically(String methodName, Object[] args, String input) throws Exception {
+		// Find the method based on the name and arguments
 			Method method = findMethod(methodName, args, null);
 			
 			if (method != null) {
@@ -345,20 +243,25 @@ public class Evaluator {
 			} else {
 				// If method not found, dynamically compile and execute the code
 				String className = "DynamicMethodEvaluator";
-				String code = "import java.lang.*; public class " + className + " { public static void eval() { " + input + " } }";
-				return compileAndExecute(className, "eval", code);
+				StringBuilder code = new StringBuilder();
+				code.append("import java.lang.*; public class ").append(className).append(" { ");
+				code = injectStoredVariables(code);
+				code.append("public static")
+					.append(input.contains("return") ? " Object " : " void ")
+					.append("eval() { ")
+					.append(input)
+					.append(" } }");
+				
+				code = injectImports(code);
+				return compiler.compileAndExecute(className, "eval", code.toString());
 			}
-		}
-		
-		// No method found
-		return null;
 	}
 
 	private static Method findMethod(String methodName, Object[] args, Class<?> clazz) {
 		if (clazz == null) {
-			Method method = compiledMethods.get("MethodEvaluator." + methodName);
+			Method method = state.getCompiledMethod("MethodEvaluator." + methodName);
 			if (method == null) {
-				for (Class<?> importedClass : compiledClasses.values()) {
+				for (Class<?> importedClass : state.getCompiledClasses().values()) {
 					try {
 						method = importedClass.getMethod(methodName, Arrays.stream(args).map(Object::getClass).toArray(Class<?>[]::new));
 						break;
@@ -383,6 +286,10 @@ public class Evaluator {
 		String methodName = input.substring(0, input.indexOf('(')).trim();
 		methodName = methodName.substring(methodName.lastIndexOf(' ') + 1);
 		
+		// Extract the parameter types
+		String paramString = input.substring(input.indexOf('(') + 1, input.indexOf(')')).trim();
+		Class<?>[] parameterTypes = parser.extractParameterTypes(paramString);
+
 		// Create method code, injecting stored variables
 		StringBuilder methodCode = new StringBuilder();
 		methodCode = injectStoredVariables(methodCode);
@@ -390,20 +297,20 @@ public class Evaluator {
 		
 		// Compile and execute the method
 		StringBuilder code = new StringBuilder();
-		code.append("import java.lang.*; public class ").append(className).append(" { ").append(methodCode.toString()).append(" }");
+		code.append("import java.lang.*; public class ").append(className).append(" { ")
+			.append(methodCode.toString()).append(" }");
 		code = injectImports(code);
-	
-		compile(className + ".java", code.toString());
-		loadCompiledClass(className);
-		Method method = compiledClasses.get(className).getMethod(methodName);
-		compiledMethods.put(className + "." + methodName, method);
+
+		compiler.compile(className + ".java", code.toString());
+		compiler.loadCompiledClass(className, code.toString());
+		Method method = state.getCompiledClass(className).getMethod(methodName, parameterTypes);
+		state.addCompiledMethod(className + "." + methodName, method);
 	}
 
 	private static StringBuilder injectStoredVariables(StringBuilder methodCode) {
 		// Inject stored variables into the method code
-		for (Map.Entry<String, Variable> entry : storedVariables.entrySet()) {
-			methodCode.append("static ").append(entry.getValue().getType()).append(" ").append(entry.getKey())
-					.append(" = ").append(entry.getValue().getValue()).append("; ");
+		for (Map.Entry<String, Variable> entry : state.getStoredVariables().entrySet()) {
+			methodCode.append("static ").append(entry.getValue().getInput());
 		}
 		return methodCode;
 	}
@@ -423,64 +330,16 @@ public class Evaluator {
 		// String implementsInterfaceName = input.contains("implements") ? input.substring(input.indexOf("implements") + 10, input.indexOf("{")).trim() : null; 
 		
 		// Compile the class
-		compile(className + ".java", code.toString().trim());
-		loadCompiledClass(className);
+		compiler.compile(className + ".java", code.toString().trim());
+		compiler.loadCompiledClass(className, code.toString().trim());
 	}
 
 	private static StringBuilder injectImports(StringBuilder code) {
 		// Inject stored imports into the class code
-		for (String importStatement : storedImports) {
+		for (String importStatement : state.getStoredImports()) {
 			code.insert(0, importStatement + "\n");
 		}
 
 		return code;
-	}
-
-	private static void compile(String fileName, String code) throws Exception {
-		JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-		StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null);
-
-		// Create the directory if it doesn't exist
-		File dir = new File("./tmp/");
-		if (!dir.exists()) {
-			dir.mkdirs();
-		}
-
-		// Write the code to a file
-		File sourceFile = new File(dir, fileName);
-		try (Writer writer = new FileWriter(sourceFile)) {
-			writer.write(code);
-		}
-
-		// Compile the file
-		Iterable<? extends JavaFileObject> fileObjects = fileManager.getJavaFileObjectsFromFiles(Arrays.asList(sourceFile));
-		boolean compilationSuccess = compiler.getTask(null, fileManager, null, Arrays.asList("-d", "./tmp/"), null, fileObjects).call();
-		if (!compilationSuccess) {
-			throw new RuntimeException("Compilation failed.");
-		}
-	}
-
-	private static Object compileAndExecute(String className, String methodName, String code) throws Exception {
-		compile(className + ".java", code);
-		loadCompiledClass(className);
-		Method method = compiledClasses.get(className).getMethod(methodName);
-		return method.invoke(null);
-	}
-
-	private static void loadCompiledClass(String className) throws Exception {
-		// Initialize class loader once
-		if (classLoader == null) {
-			// Point to the directory where compiled .class files are stored
-			classLoader = URLClassLoader.newInstance(new URL[]{new File("./tmp/").toURI().toURL()});
-		}
-		
-		// Load the class using the same class loader
-		Class<?> compiledClass = Class.forName(className, true, classLoader);
-		compiledClasses.put(className, compiledClass);
-		
-		// Store any methods from the class into compiledMethods
-		for (Method method : compiledClass.getDeclaredMethods()) {
-			compiledMethods.put(className + "." + method.getName(), method);
-		}
 	}
 }

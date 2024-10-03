@@ -1,5 +1,7 @@
 package com.padlocks;
 
+import java.io.File;
+
 import org.jline.reader.Completer;
 import org.jline.reader.Highlighter;
 import org.jline.reader.LineReader;
@@ -31,6 +33,19 @@ public class SimpleJavaREPL {
       // Check if the user wants to exit the REPL
       if (input.equalsIgnoreCase("exit")) {
         System.out.println("Exiting REPL...");
+
+        // Delete ./tmp directory
+        File dir = new File("./tmp/");
+        if (dir.exists()) {
+          File[] files = dir.listFiles();
+          if (files != null) {
+            for (File file : files) {
+              file.delete();
+            }
+          }
+          dir.delete();
+        }
+        // Exit the REPL
         break;
       }
 
