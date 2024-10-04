@@ -68,13 +68,26 @@ public class Evaluator {
 		state.addStoredImport(input);
 	}
 
+	private static void evaluateStatement(String input) throws Exception {
+		if (input.contains("=")) {
+			handleVariableDeclaration(input);
+		} else if (input.contains("(") && input.contains(")")) {
+			handleMethodInvocation(input);
+		} else {
+			// It's an expression ending with a semicolon
+			evaluateExpression(input);
+		}
+	}
+
 	private static Object evaluateExpression(String input) throws Exception {
 		String className = "ExpressionEvaluator";
 		String methodName = "eval";
 		StringBuilder code = new StringBuilder();
 		code.append("import java.lang.*; public class ").append(className).append(" { ");
+		code = injectStoredStaticVariables(code);
+		code.append("public static Object ").append(methodName).append("() { ");
 		code = injectStoredVariables(code);
-		code.append("public static Object ").append(methodName).append("() { ").append("return ").append(input.replace(";", "")).append("; } }");
+		code.append("return ").append(input.replace(";", "")).append("; } }");
 
 		Object result = compiler.compileAndExecute(className, methodName, code.toString());
 		if (result != null) {
@@ -88,33 +101,51 @@ public class Evaluator {
 	private static void handleVariableDeclaration(String input) throws Exception {
 		String[] tokens = input.split("=");
 		String variableName;
-		String variableType = null;
+		String variableType;
 		String value = tokens[1].replace(";", "").trim();
 
 		// Check if it's a declaration or an assignment
-		if (tokens[0].split(" ").length == 2) {
-			variableName = tokens[0].split(" ")[1].trim();
-			variableType = tokens[0].split(" ")[0].trim();
-		} else {
-			variableName = tokens[0].trim();
-		}
+		String[] modifiers = tokens[0].split(" ");
+		variableName = modifiers[modifiers.length - 1];
 
+		// Get access level of the variable
+		Variable.AccessLevel access = Variable.getAccessLevel(input);
+
+		// Check if the variable is a static variable
+		boolean isStatic = input.contains("static");
+
+		// Evaluate the value of the variable
 		Object parsedValue = evaluateVariable(value);
 
 		// If it's a declaration, check if the variable already exists
 		Variable existingVariable = state.getStoredVariable(variableName);
-		if (variableType != null) {
-			if (existingVariable == null) {
-				Variable newVariable = new Variable(variableName, variableType, parsedValue, input);
-				state.addStoredVariable(variableName, newVariable);
-			} else {
-				// Update the value of the existing variable
-				existingVariable.setValue(parsedValue);
-			}
-		} else if (existingVariable != null) {
-			existingVariable.setValue(parsedValue);
+		if (existingVariable == null) {
+			variableType = modifiers[modifiers.length - 2];
+			// Create a new variable and store it
+			Variable newVariable = new Variable(access, isStatic, variableName, variableType, parsedValue, input);
+			state.addStoredVariable(variableName, newVariable);
 		} else {
-			throw new RuntimeException("Variable " + variableName + " not declared.");
+			// Update the value of the existing variable
+			existingVariable.setValue(parsedValue);
+
+			// Update the Eval class with the new variable value
+			String evalSource = state.getClassSource("Eval");
+			StringBuilder newEvalCode = new StringBuilder();
+
+			// Line by line
+			String[] lines = evalSource.split("\n");
+			for (String line : lines) {
+				if (line.contains(existingVariable.getName()) && line.contains("=")) {
+					// Replace the old variable value with the new one
+					newEvalCode.append(existingVariable.getInput()).append("\n");
+				} else {
+					newEvalCode.append(line).append("\n");
+				}
+			}
+
+			// Compile
+			compiler.compile("Eval.java", newEvalCode.toString());
+			compiler.loadCompiledClass("Eval", newEvalCode.toString());
 		}
 	}
 
@@ -279,9 +310,21 @@ public class Evaluator {
 	private static StringBuilder injectStoredVariables(StringBuilder methodCode) {
 		// Inject stored variables into the method code
 		for (Map.Entry<String, Variable> entry : state.getStoredVariables().entrySet()) {
-			methodCode.append("static ").append(entry.getValue().getInput());
+			if (!entry.getValue().isStatic()) {
+				methodCode.append(entry.getValue().getInput()).append("\n");
+			}
 		}
 		return methodCode;
+	}
+
+	private static StringBuilder injectStoredStaticVariables(StringBuilder classCode) {
+		// Inject stored static variables into the class code
+		for (Map.Entry<String, Variable> entry : state.getStoredVariables().entrySet()) {
+			if (entry.getValue().isStatic()) {
+				classCode.append(entry.getValue().getInput()).append("\n");
+			}
+		}
+		return classCode;
 	}
 
 	private static void evaluateClass(String input) throws Exception {
@@ -388,10 +431,9 @@ public class Evaluator {
 					StringBuilder evalCode = new StringBuilder();
 					evalCode.append("public class Eval {\n");
 					// Inject stored variables
-					evalCode = injectStoredVariables(evalCode);
-					// Inject the new static variable
-					evalCode.append(input).append("\n");
+					evalCode = injectStoredStaticVariables(evalCode);
 					evalCode.append("public static void main(String[] args) {\n");
+					evalCode = injectStoredVariables(evalCode);
 					evalCode.append("}\n");
 					evalCode.append("}\n");
 					// Inject imports
@@ -408,21 +450,21 @@ public class Evaluator {
 					// Line by line
 					String[] lines = evalSource.split("\n");
 					for (String line : lines) {
-						if (line.contains("public class Eval {")) {
-							newEvalCode.append(line).append("\n");
-							// Inject stored variables only if they are new and not already there
-							for (Map.Entry<String, Variable> entry : state.getStoredVariables().entrySet()) {
-								if (!evalSource.contains(entry.getValue().getInput())) {
-									newEvalCode.append("static ").append(entry.getValue().getInput());
-								}
-							}
-							// Inject the new static variable
+						if (line.contains("public static void main(String[] args) {")) {
+							// Inject the new static variable before the main method
 							newEvalCode.append(input).append("\n");
-						} else {
-							newEvalCode.append(line).append("\n");
 						}
+						newEvalCode.append(line).append("\n");
 					}
+
+					// Compile the Eval class
+					compiler.compile("Eval.java", newEvalCode.toString());
+					compiler.loadCompiledClass("Eval", newEvalCode.toString());
 				}
+			} else if (parser.isStatement(input)) {
+				evaluateStatement(input);
+			} else if (parser.isExpression(input)) {
+				evaluateExpression(input);
 			} else if (parser.isMethod(input)) {
 				String className = "Eval";
 
