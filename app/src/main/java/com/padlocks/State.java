@@ -12,7 +12,23 @@ public class State {
     private final Map<String, Class<?>> compiledClasses = new HashMap<>();
     private final Map<String, Method> compiledMethods = new HashMap<>();
     private final Map<String, String> classSources = new HashMap<>();
+    private SourceCode code = new SourceCode();
 
+    public StringBuilder getCode() {
+        return code.getCode();
+    }
+
+    public void updateCode(StringBuilder newCode) {
+        code.setCode(newCode);
+    }
+
+    public boolean isReadyToExecute() {
+        return code.isReadyToExecute();
+    }
+
+    public void setReadyToExecute(boolean readyToExecute) {
+        code.setReadyToExecute(readyToExecute);
+    }
 
     // Variable Management
     public void addStoredVariable(String name, Variable variable) {
@@ -70,6 +86,15 @@ public class State {
 
     public String getClassSource(String className) {
         return classSources.get(className);
+    }
+
+    public void clear() {
+        storedVariables.clear();
+        storedImports.clear();
+        compiledClasses.clear();
+        compiledMethods.clear();
+        classSources.clear();
+        code = new SourceCode();
     }
 
     @Override
