@@ -175,10 +175,15 @@ public class Evaluator {
 			.map(parser::convertToPrimitive)
 			.toArray(Class<?>[]::new);
 
-		// Check if the class is already compiled locally
-		Class<?> clazz = state.getCompiledClasses().containsKey(className) 
-			? state.getCompiledClass(className) 
-			: Class.forName(className);
+		Class<?> clazz;
+		try {
+			// Check if the class is already compiled locally
+			clazz = state.getCompiledClasses().containsKey(className) 
+				? state.getCompiledClass(className) 
+				: Class.forName(className);
+		} catch (ClassNotFoundException e) {
+			return null;
+		}
 
 		// Get the constructor with the appropriate argument types
 		Constructor<?> constructor = clazz.getDeclaredConstructor(argTypes);
@@ -272,11 +277,12 @@ public class Evaluator {
 			String className = "DynamicMethodEvaluator";
 			StringBuilder code = new StringBuilder();
 			code.append("import java.lang.*; public class ").append(className).append(" { ");
-			code = injectStoredVariables(code);
+			code = injectStoredStaticVariables(code);
 			code.append("public static")
 				.append(input.contains("return") ? " Object " : " void ")
-				.append("eval() { ")
-				.append(input)
+				.append("eval() { ");
+			code = injectStoredVariables(code);
+			code.append(input)
 				.append(" } }");
 
 			code = injectImports(code);
@@ -464,7 +470,8 @@ public class Evaluator {
 			} else if (parser.isStatement(input)) {
 				evaluateStatement(input);
 			} else if (parser.isExpression(input)) {
-				evaluateExpression(input);
+				// Add semicolon to the expression incase its a statement without a semicolon
+				evaluateStatement(input + ';');
 			} else if (parser.isMethod(input)) {
 				String className = "Eval";
 
